@@ -139,7 +139,7 @@ class Answer_Generator():
         state2_temp=[]
 
 	# TODO: calculate max length of caption and question
-	for j in range(15): 
+	for j in range(30): 
             if j == 0:
                 question_emb = tf.zeros([self.batch_size, self.dim_hidden])
 		caption_emb = tf.zers([self.batch_size, self.dim_hidden])
