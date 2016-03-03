@@ -94,10 +94,10 @@ class Answer_Generator():
 	
 	# embed the word into lower space
 	with tf.device("/cpu:0"):
-            self.question_emb_matrix = tf.Variable(tf.random_uniform([n_words_q, dim_hidden], -0.1, 0.1), name='question_emb_matrix')
-
-	with tf.device("/cpu:0"):
-            self.caption_emb_matrix = tf.Variable(tf.random_uniform([n_words_c, dim_hidden], -0.1, 0.1), name='caption_emb_matrix')
+            self.question_emb_W = tf.Variable(tf.random_uniform([n_words_q, dim_hidden], -0.1, 0.1), name='question_emb_Q')
+	    self.question_emb_b = tf.zeros([dim_hidden], name='question_emb_b')
+	#with tf.device("/cpu:0"):
+        #    self.caption_emb_matrix = tf.Variable(tf.random_uniform([n_words_c, dim_hidden], -0.1, 0.1), name='caption_emb_matrix')
 
 	# TODO:embed loser space into word
 	'''
@@ -120,29 +120,43 @@ class Answer_Generator():
 
     def build_model(self):
 	# placeholder is for feeding data
-	image_feature = tf.placeholder(tf.float32, [self.batch_size, self.dim_image])
-	# TODO
-	#caption_emb = tf.placeholder(tf.int32, [self.batch_size, ??])       
-	#question_emb = tf.placeholder(tf.int32, [self.batch_size, ??])
+	image_feature = tf.placeholder(tf.float32, [self.batch_size, self.dim_image])  # (batch_size, dim_image)
+	question = tf.placeholder(tf.float32, [self.batch_size, self.n_words_q])  # (batch_size, n_words)
+	question_len = tf.placeholder(tf.float32, [self.batch_size])  # (batch_size, )
+	answer = tf.placeholder(tf.float32, [self.batch_size])	# (batch_size, )
+	# TODO  
+	# caption_emb = tf.placeholder(tf.int32, [self.batch_size, ??])
 
-	image_emb = tf.nn.xw_plus_b(image_feature, self.embed_image_W, self.embed_image_b) # [batch_size, dim_hidden]
-	
-	# initialize LSTM state 
+	image_emb = tf.nn.xw_plus_b(image_feature, self.embed_image_W, self.embed_image_b) # (batch_size, dim_hidden)
+	image_emb = tf.nn.dropout(image_emb, self.drop_out_rate)
+	image_emb = tf.tanh(image_emb)
+	question_emb = tf.nn.xw_plus_b(question, self.embed_question_W, self.embed_question_b) # (batch_size, dim_hidden)
+	question_emb = tf.nn.xw_plus_b(question_emb, self.drop_out_rate)
+	question_emb = tf.tanh(question_emb)
+	# TODO
+	# caption_emb = tf.nn.xw_plus_b(caption, self.embed_caption_W, self.embed_caption_b) # (batch_size, dim_hidden)
+        # caption_emb = tf.nn.xw_plus_b(caption_emb, self.drop_out_rate)
+        # caption_emb = tf.tanh(caption_emb)
+
+	# initialize stzcked-LSTM state 
+	state = tf.zeros([self.batch_size, self.stacked_lstm.state_size])
+	'''
 	state1 = tf.zeros([self.batch_size, self.lstm1.state_size])
         state2 = tf.zeros([self.batch_size, self.lstm2.state_size])
         state1_return = tf.zeros([self.batch_size, self.lstm1.state_size])
         state2_return = tf.zeros([self.batch_size, self.lstm2.state_size])
+	'''
 
 	probs = []
         loss = 0.0
-        state1_temp=[]
-        state2_temp=[]
+        #state1_temp=[]
+        #state2_temp=[]
 
 	# TODO: calculate max length of caption and question
 	for j in range(30): 
             if j == 0:
                 question_emb = tf.zeros([self.batch_size, self.dim_hidden])
-		caption_emb = tf.zers([self.batch_size, self.dim_hidden])
+		#caption_emb = tf.zer0s([self.batch_size, self.dim_hidden])
 	    '''
             else:
                 # cuttent question/caption embed => ground truth
@@ -152,9 +166,11 @@ class Answer_Generator():
                     question_emb = tf.nn.embedding_lookup(self.question_emb_matrix, ?)
 		    caption_emb = tf.nn.embedding_loofup(self.caption_emb_matrix, ?)
 	    '''
-	    if j == 0:
+	    if j > 0:
 		tf.get_variable_scope().reuse_variables()
-	    #output, state = self.stacked_lstm(tf.concat(1,[current_embed, output1]), state)
+	    output, state = self.stacked_lstm(tf.concat(1,[image_emb, question_emb]), state)
+	
+	    
 	    '''
             with tf.variable_scope("LSTM1"):
                 output1, state1 = self.lstm1_dropout( padding, state1 )
