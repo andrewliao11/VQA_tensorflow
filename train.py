@@ -108,7 +108,7 @@ class Answer_Generator():
 	image = tf.placeholder(tf.float32, [self.batch_size, self.dim_image])  # (batch_size, dim_image)
 	question = tf.placeholder(tf.int32, [self.batch_size, max_words_q])
 	question_length = tf.placeholder(tf.int32, [self.batch_size])
-	label = tf.placeholder(tf.int32, [self.batch_size])
+	label = tf.placeholder(tf.int32, [self.batch_size]) # (batch_size, )
 	#question_mask = tf.placeholder(tf.float32, [self.batch_size])	
 
 	# [image] embed image feature to dim_hidden
@@ -117,25 +117,17 @@ class Answer_Generator():
         image_emb = tf.tanh(image_emb)
 
 	# [answer] ground truth
-        labels = tf.expand_dims(label, 1) # b x 1
-        indices = tf.expand_dims(tf.range(0, self.batch_size, 1), 1) # b x 1
-        concated = tf.concat(1, [indices, labels]) # b x 2
+        labels = tf.expand_dims(label, 1) # (batch_size, 1)
+        indices = tf.expand_dims(tf.range(0, self.batch_size, 1), 1) # (batch_size, 1)
+        concated = tf.concat(1, [indices, labels]) # (batch_size, 2)
         answer = tf.sparse_to_dense(concated, tf.pack([self.batch_size, num_answer]), 1.0, 0.0) # (batch_size, num_answer)
 
 	# [question_mask] 
-	question_mask = tf.to_float(question_length) # (batch_size, )
-        #question_mask = tf.expand_dims(question_mask,2)
-        question_mask = tf.expand_dims(question_mask,1)
-        question_mask = tf.tile(question_mask,tf.constant([1,1,max_words_q]))
-        question_mask = tf.transpose(question_mask, perm=[1, 0, 2]
-
-	'''
-	# one hot vector
 	labels_q = tf.expand_dims(question_length, 1) # b x 1
         indices_q = tf.expand_dims(tf.range(0, self.batch_size, 1), 1) # b x 1
         concated_q = tf.concat(1, [indices_q, labels_q]) # b x 2
         question_mask = tf.sparse_to_dense(concated_q, tf.pack([self.batch_size, max_words_q]), 1.0, 0.0) # (batch_size, max_words_q)
-	'''
+	
 	probs = []
         loss = 0.0
 
@@ -158,11 +150,11 @@ class Answer_Generator():
 	
 	
 	# predict   
+	# pack -> convert input into an array
 	outputs = tf.pack(outputs) # (batch_size, max_words_q, dim_hidden)
 	output_final = tf.reduce_sum(tf.mul(outputs, question_mask), 1) # (batch_size, )
 	answer_pred = tf.nn.xw_plus_b(output_final, self.answer_emb_W, self.answer_emb_b) # (batch_size, num_answer)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(answer_pred, answer) # (batch_size, )
-        # cross_entropy = cross_entropy * caption_mask[:,j]
 	loss = tf.reduce_sum(cross_entropy)
 	loss = loss/self.batch_size
 
@@ -192,7 +184,7 @@ def train():
             bias_init_vector = None)
     
     tf_loss = model.build_model()
-    '''
+    
     sess = tf.InteractiveSession()
     writer = tf.train.SummaryWriter('/tmp/tf_log', sess.graph_def)
     saver = tf.train.Saver(max_to_keep=100)
@@ -205,24 +197,34 @@ def train():
 	index = np.arange(num_train)
         np.random.shuffle(index)
         train_data['question'] = train_data['question'][index,:]
-	train_data['length_q'] = train_data['length_q'][index,:]
-	train_data['answers'] = train_data['answers'][index,:]
-        train_data['img_list'] = train_data['img_list'][index,:]
+	train_data['length_q'] = train_data['length_q'][index]
+	train_data['answers'] = train_data['answers'][index]
+        train_data['img_list'] = train_data['img_list'][index]
 
         tStart_epoch = time.time()
-        loss_epoch = np.zeros(len(train_data))
+        loss_epoch = np.zeros(num_train)
 	for current_batch_file_idx in xrange(num_train):
 
             tStart = time.time()
-            #current_batch = h5py.File(train_data[current_batch_file_idx])
-            current_img = np.zeros((batch_size, dim_image))
-            current_question = np.zeros((batch_size, max_words_q))
-            current_question_length = np.zeros((batch_size))
-            current_label = np.zeros((batch_size))
-            # set input data into current_*
+            # set data into current*
+	    current_question = train_data['question'][current_batch_file_idx,:]
+            current_length_q = train_data['length_q'][current_batch_file_idx]
+            current_answers = train_data['answers'][current_batch_file_idx]
+            current_img_list = train_data['img_list'][current_batch_file_idx]
+	    # init the para
+	    current_img = np.zeros((batch_size, dim_image))
+	    current_img_idx = np.zeros((batch_size))
+            #current_question = np.zeros((batch_size, max_words_q))
+            #current_question_length = np.zeros((batch_size))
+            #current_label = np.zeros((batch_size))
+
             # one batch at a time
-            for ind in xrange(batch_size):
-                current_feats[ind,:,:] = current_batch['data'][:,ind,:]
+            for idx_batch in xrange(batch_size):
+                current_img_idx[idx_batch] = current_img_list[idx_batch] # (batch_size, )
+		# minus 1 since in MSCOCO the idx is 0~82459
+		# 		   VQA 	  the idx is 1~82460	
+		current_img[idx_batch,:] = img_feature[current_img_idx-1] # (batch_size, dim_image)
+		'''
                 idx = np.where(current_batch['label'][:,ind] != -1)[0]
                 if len(idx) == 0:
                         continue
@@ -231,8 +233,34 @@ def train():
                         continue
                 current_HLness[ind,idx] = current_batch['label'][idx,ind]
                 current_HLness_masks[ind,idx] = 1
-                current_video_masks[ind,idy[-1]] = 1
-    '''    	
+                current_video_masks[ind,idy[-1]] = 1   	
+		'''
+	    '''
+	    current_captions = current_batch['title']
+            current_caption_ind = map(lambda cap: [wordtoix[word] for word in cap.lower().split(' ') if word in wordtoix], current_captions)
+
+            current_caption_matrix = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=15-1)
+            current_caption_matrix = np.hstack( [current_caption_matrix, np.zeros( [len(current_caption_matrix),1]) ] ).astype(int)
+            current_caption_masks = np.zeros((current_caption_matrix.shape[0], current_caption_matrix.shape[1]))
+            nonzeros = np.array( map(lambda x: (x != 0).sum()+1, current_caption_matrix ))
+	    
+	    for ind, row in enumerate(current_caption_masks):
+                row[:nonzeros[ind]] = 1
+	    '''
+            # do the training process!!!
+            _, loss = sess.run(
+                    [train_op, tf_loss],
+                    feed_dict={
+                        tf_image: current_img,
+                        tf_question: current_question,
+                        tf_question_length: current_length_q,
+                        tf_label: current_answers,
+                        })
+	    loss_epoch[current_batch_file_idx] = loss
+            tStop = time.time()
+            print ("Epoch:", epoch, " Batch:", current_batch_file_idx, " Loss:", loss)
+            print ("Time Cost:", round(tStop - tStart,2), "s")
+
 
 if __name__ == '__main__':
     train()
