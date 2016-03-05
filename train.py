@@ -12,13 +12,13 @@ from sklearn.metrics import average_precision_score
 import json
 
 # path
-json_data_path= '/home/andrewliao11/VQA_LSTM_CNN/data_prepro.json'
-h5_data_path = '/home/andrewliao11/VQA_LSTM_CNN/data_prepro.h5'
-image_feature_path = '/home/andrewliao11/VQA_LSTM_CNN/data_img.h5'
+json_data_path= '/home/andrewliao11/Work/VQA_challenge/data_prepro.json'
+h5_data_path = '/home/andrewliao11/Work/VQA_challenge/data_prepro.h5'
+image_feature_path = '/home/andrewliao11/Work/VQA_challenge/data_img.h5'
 
 ## Some args
 normalize = True
-max_words_q = 30
+max_words_q = 26
 num_answer = 1000
 
 def get_data():
@@ -52,7 +52,8 @@ def get_data():
 	# total 82460 img 
 	# -----1~82460-----
 	tem = hf.get('img_pos_train')
-        train_data['img_list'] = np.array(tem)
+	# convert into 0~82459
+        train_data['img_list'] = np.array(tem)-1
 	# answer is 1~1000
 	tem = hf.get('answers')
         train_data['answers'] = np.array(tem)
@@ -75,10 +76,15 @@ class Answer_Generator():
         self.drop_out_rate = drop_out_rate
 
 	# 2 layers LSTM cell
-	self.lstm = rnn_cell.BasicLSTMCell(self.dim_hidden,self.dim_hidden)
-	self.lstm_dropout = rnn_cell.DropoutWrapper(self.lstm,output_keep_prob=1 - self.drop_out_rate)
-	self.stacked_lstm = rnn_cell.MultiRNNCell([self.lstm_dropout] * 2)
-	
+	self.lstm1 = rnn_cell.LSTMCell(2*self.dim_hidden,2*self.dim_hidden,use_peepholes = True)
+        self.lstm1_dropout = rnn_cell.DropoutWrapper(self.lstm1,output_keep_prob=1 - self.drop_out_rate)
+        self.lstm2 = rnn_cell.LSTMCell(2*self.dim_hidden,2*self.dim_hidden,use_peepholes = True)
+        self.lstm2_dropout = rnn_cell.DropoutWrapper(self.lstm2,output_keep_prob=1 - self.drop_out_rate)
+	'''
+	self.lstm = rnn_cell.BasicLSTMCell(self.dim_hidden)
+	#self.lstm_dropout = rnn_cell.DropoutWrapper(self.lstm,output_keep_prob=1 - self.drop_out_rate)
+	self.stacked_lstm = rnn_cell.MultiRNNCell([self.lstm] * 2)
+	'''
 	# image feature embedded
 	self.embed_image_W = tf.Variable(tf.random_uniform([dim_image, dim_hidden], -0.1,0.1), name='embed_image_W')
 	if bias_init_vector is not None:
@@ -91,7 +97,7 @@ class Answer_Generator():
             self.question_emb_W = tf.Variable(tf.random_uniform([n_words_q, dim_hidden], -0.1, 0.1), name='question_emb_W')
 
 	# embed lower space into answer
-	self.answer_emb_W = tf.Variable(tf.random_uniform([dim_hidden, num_answer], -0.1, 0.1), name='answer_emb_W')	
+	self.answer_emb_W = tf.Variable(tf.random_uniform([2*dim_hidden, num_answer], -0.1, 0.1), name='answer_emb_W')	
 	if bias_init_vector is not None:
             self.answer_emb_b = tf.Variable(bias_init_vector.astype(np.float32), name='answer_emb_b')
         else:
@@ -109,7 +115,6 @@ class Answer_Generator():
 	question = tf.placeholder(tf.int32, [self.batch_size, max_words_q])
 	question_length = tf.placeholder(tf.int32, [self.batch_size])
 	label = tf.placeholder(tf.int32, [self.batch_size]) # (batch_size, )
-	#question_mask = tf.placeholder(tf.float32, [self.batch_size])	
 
 	# [image] embed image feature to dim_hidden
         image_emb = tf.nn.xw_plus_b(image, self.embed_image_W, self.embed_image_b) # (batch_size, dim_hidden)
@@ -131,8 +136,10 @@ class Answer_Generator():
 	probs = []
         loss = 0.0
 
-        state = tf.zeros([self.batch_size, max_words_q]) 
-	output = tf.zeros([self.batch_size, max_words_q])
+	state1 = tf.zeros([self.batch_size, self.lstm1.state_size])
+        state2 = tf.zeros([self.batch_size, self.lstm2.state_size])
+        #state = tf.zeros([self.batch_size, max_words_q]) 
+	#output = tf.zeros([self.batch_size, 2*self.dim_hidden])
 
 	states = []
 	outputs = []
@@ -143,22 +150,29 @@ class Answer_Generator():
                 with tf.device("/cpu:0"):
 		    tf.get_variable_scope().reuse_variables()
                     question_emb = tf.nn.embedding_lookup(self.question_emb_W, question[:,j-1])
-	    output, state = self.stacked_lstm(tf.concat(1,[image_emb, question_emb]), state)
+
+	    with tf.variable_scope("LSTM1"):
+                output1, state1 = self.lstm1_dropout(tf.concat(1,[image_emb, question_emb]), state1 )
+            with tf.variable_scope("LSTM2"):
+                output, state2 = self.lstm2_dropout(output1, state2 )
+	    #output, state = self.stacked_lstm(image_emb, state)
+	    #output, state = self.stacked_lstm(tf.concat(1,[image_emb, question_emb]), state)
 	    # record the state an output
-	    states.append(state)
+	    states.append(state2)
 	    outputs.append(output)
 	
 	
 	# predict   
 	# pack -> convert input into an array
-	outputs = tf.pack(outputs) # (batch_size, max_words_q, dim_hidden)
-	output_final = tf.reduce_sum(tf.mul(outputs, question_mask), 1) # (batch_size, )
+	outputs = tf.pack(outputs) # (max_words_q, batch_size, 2*dim_hidden)
+	#outputs = outputs[:,range(self.batch_size),:]
+	output_final = tf.reduce_sum(tf.mul(outputs, question_mask), 1) # (batch_size, 2*dim_hidden)
 	answer_pred = tf.nn.xw_plus_b(output_final, self.answer_emb_W, self.answer_emb_b) # (batch_size, num_answer)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(answer_pred, answer) # (batch_size, )
 	loss = tf.reduce_sum(cross_entropy)
 	loss = loss/self.batch_size
 
-	return loss
+	return loss, image, question, question_length, label
 
 ## Train Parameter
 dim_image = 4096
@@ -183,10 +197,10 @@ def train():
             drop_out_rate = 0.5,
             bias_init_vector = None)
     
-    tf_loss = model.build_model()
+    tf_loss, tf_image, tf_question, tf_question_length, tf_label = model.build_model()
     
     sess = tf.InteractiveSession()
-    writer = tf.train.SummaryWriter('/tmp/tf_log', sess.graph_def)
+    writer = tf.train.SummaryWriter('/home/andrewliao11/Word/VQA_challenge/tmp/tf_log', sess.graph_def)
     saver = tf.train.Saver(max_to_keep=100)
     train_op = tf.train.AdamOptimizer(learning_rate).minimize(tf_loss)
     tf.initialize_all_variables().run()
@@ -196,14 +210,16 @@ def train():
 	# shuffle the training data
 	index = np.arange(num_train)
         np.random.shuffle(index)
-        train_data['question'] = train_data['question'][index,:]
-	train_data['length_q'] = train_data['length_q'][index]
+        train_data['question'] = train_data['question'][index,:] # (num_train, max_words_q)
+	train_data['length_q'] = train_data['length_q'][index] # (num_train, )
 	train_data['answers'] = train_data['answers'][index]
         train_data['img_list'] = train_data['img_list'][index]
 
         tStart_epoch = time.time()
         loss_epoch = np.zeros(num_train)
-	for current_batch_file_idx in xrange(num_train):
+	num_batch = num_train/batch_size + 1
+	split_batch = np.array_split(np.arange(num_train),num_batch)
+	for current_batch_file_idx in split_batch:
 
             tStart = time.time()
             # set data into current*
@@ -213,18 +229,20 @@ def train():
             current_img_list = train_data['img_list'][current_batch_file_idx]
 	    # init the para
 	    current_img = np.zeros((batch_size, dim_image))
-	    current_img_idx = np.zeros((batch_size))
+	    #current_img_idx = np.zeros((batch_size))
             #current_question = np.zeros((batch_size, max_words_q))
             #current_question_length = np.zeros((batch_size))
             #current_label = np.zeros((batch_size))
 
+	    current_img = img_feature[current_img_list,:] # (batch_size, dim_image)
+	    '''
             # one batch at a time
-            for idx_batch in xrange(batch_size):
-                current_img_idx[idx_batch] = current_img_list[idx_batch] # (batch_size, )
+            #for idx_batch in xrange(batch_size):
+                #current_img_idx[idx_batch] = current_img_list[idx_batch] # (batch_size, )
 		# minus 1 since in MSCOCO the idx is 0~82459
 		# 		   VQA 	  the idx is 1~82460	
-		current_img[idx_batch,:] = img_feature[current_img_idx-1] # (batch_size, dim_image)
-		'''
+		#current_img[idx_batch,:] = img_feature[current_img_idx-1] # (batch_size, dim_image)
+		
                 idx = np.where(current_batch['label'][:,ind] != -1)[0]
                 if len(idx) == 0:
                         continue
@@ -234,7 +252,7 @@ def train():
                 current_HLness[ind,idx] = current_batch['label'][idx,ind]
                 current_HLness_masks[ind,idx] = 1
                 current_video_masks[ind,idy[-1]] = 1   	
-		'''
+	    '''
 	    '''
 	    current_captions = current_batch['title']
             current_caption_ind = map(lambda cap: [wordtoix[word] for word in cap.lower().split(' ') if word in wordtoix], current_captions)
@@ -254,7 +272,7 @@ def train():
                         tf_image: current_img,
                         tf_question: current_question,
                         tf_question_length: current_length_q,
-                        tf_label: current_answers,
+                        tf_label: current_answers
                         })
 	    loss_epoch[current_batch_file_idx] = loss
             tStop = time.time()
