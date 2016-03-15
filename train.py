@@ -10,11 +10,14 @@ from tensorflow.models.rnn import rnn_cell
 from keras.preprocessing import sequence
 from sklearn.metrics import average_precision_score
 import json
+import pdb
 
 # path
 json_data_path= '/home/andrewliao11/Work/VQA_challenge/data_prepro.json'
 h5_data_path = '/home/andrewliao11/Work/VQA_challenge/data_prepro.h5'
 image_feature_path = '/home/andrewliao11/Work/VQA_challenge/data_img.h5'
+model_path = '/home/andrewliao11/Work/VQA_challenge/model/'
+
 
 ## Some args
 normalize = True
@@ -180,9 +183,7 @@ class Answer_Generator():
 	
 	# predict   
 	# pack -> convert input into an array
-	states = tf.pack(outputs) # (max_words_q, batch_size, 4*dim_hidden)
-	#states = tf.gather(states, tf.range(0, max_words_q, 1)) # (max_words_q, batch_size, 2*dim_hidden)
-	print (states)
+	output = tf.pack(outputs) # (max_words_q, batch_size, 4*dim_hidden)
 	'''
 	tem = []
 	for i in range(self.batch_size):
@@ -196,12 +197,7 @@ class Answer_Generator():
 	states = tf.gather(range(10), states)
 	print (states)
 	'''
-	#output_final = states[question_length, tf.range(0, self.batch_size, 1), :]
-	#output_final = tf.pack()
-	output_final = tf.reduce_sum(tf.mul(states, tf.to_float(question_mask)), 0) # (batch_size, 2*dim_hidden)
-	print (output_final)
-	#output_final = tf.reduce_sum(output_final, 1) # (batch_size)
-	#print (output_final)
+	output_final = tf.reduce_sum(tf.mul(output, tf.to_float(question_mask)), 0) # (batch_size, 2*dim_hidden)
 	answer_pred = tf.nn.xw_plus_b(output_final, self.answer_emb_W, self.answer_emb_b) # (batch_size, num_answer)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(answer_pred, answer) # (batch_size, )
 	loss = tf.reduce_sum(cross_entropy)
@@ -310,18 +306,21 @@ def train():
 	
         tStart_epoch = time.time()
         loss_epoch = np.zeros(num_train)
-	num_batch = num_train/batch_size + 1
-	split_batch = np.array_split(np.arange(num_train),num_batch)
-	for current_batch_file_idx in split_batch:
-
+	#num_batch = num_train/batch_size + 1
+	#split_batch = np.array_split(np.arange(num_train),num_batch)
+	#for current_batch_file_idx in split_batch:
+	for current_batch_start_idx in xrange(0,num_train-1,batch_size):
             tStart = time.time()
             # set data into current*
+	    if current_batch_start_idx + 10 < num_train:
+		current_batch_file_idx = range(current_batch_start_idx,current_batch_start_idx+10)
+	    else:
+		current_batch_file_idx = range(current_batch_start_idx,num_train)
 	    current_question = train_data['question'][current_batch_file_idx,:]
-	    #current_wuestion_mask = question_mask[:,current_batch_file_idx,:]
+            #current_wuestion_mask = question_mask[:,current_batch_file_idx,:]
             current_length_q = train_data['length_q'][current_batch_file_idx]
             current_answers = train_data['answers'][current_batch_file_idx]
             current_img_list = train_data['img_list'][current_batch_file_idx]
-	   
 	    current_img = np.zeros((batch_size, dim_image))
 	    current_img = img_feature[current_img_list,:] # (batch_size, dim_image)
 	   
@@ -372,6 +371,20 @@ def train():
             print ("Epoch:", epoch, " Batch:", current_batch_file_idx, " Loss:", loss)
             print ("Time Cost:", round(tStop - tStart,2), "s")
 
+	'''
+	# every 20 epoch: print result
+        if np.mod(epoch, 20) == 0:
+            print "Epoch ", epoch, " is done. Saving the model ..."
+            saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
+
+            current_batch = h5py.File(test_data[np.random.randint(0,len(test_data))])
+            video_tf, video_mask_tf, HLness_tf, caption_tf, probs_tf, last_embed_tf, state1_tf, state2_tf = model.build_generator()
+            ixtoword = pd.Series(np.load('./data/ixtoword.npy').tolist())
+            mp = []
+            pred_sent = []
+            gt_sent = []
+            gt_captions = current_batch['title']
+	'''
 '''
 def test(model_path='models/model-900', video_feat_path=video_feat_path):
 
@@ -430,6 +443,6 @@ def test(model_path='models/model-900', video_feat_path=video_feat_path):
 
 
 if __name__ == '__main__':
-    with tf.device('/gpu:'+str(6)):
-        train()
-   #train()
+    #with tf.device('/gpu:'+str(6)):
+    #    train()
+    train()
