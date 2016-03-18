@@ -41,7 +41,6 @@ def get_data():
 	# -----0~82459------
         tem = hf.get('images_train')
 	img_feature = np.array(tem)
-        #dataset['fv_im'] = np.array(tem)
     # load h5 file
     print('Loading h5 file...')
     with h5py.File(h5_data_path,'r') as hf:
@@ -58,8 +57,9 @@ def get_data():
 	# convert into 0~82459
         train_data['img_list'] = np.array(tem)-1
 	# answer is 1~1000
+	# change to 0~999
 	tem = hf.get('answers')
-        train_data['answers'] = np.array(tem)
+        train_data['answers'] = np.array(tem)-1
    
     print('Normalizing image feature')
     if normalize:
@@ -118,19 +118,22 @@ class Answer_Generator():
 	question = tf.placeholder(tf.int32, [self.batch_size, max_words_q])
 	question_length = tf.placeholder(tf.int32, [self.batch_size])
 	question_mask = tf.placeholder(tf.int32, [max_words_q, self.batch_size, 2*self.dim_hidden])
-	label = tf.placeholder(tf.int32, [self.batch_size]) # (batch_size, )
+	label = tf.placeholder(tf.int32, [self.batch_size, num_answer]) # (batch_size, )
+	label = tf.to_float(label)
 
 	# [image] embed image feature to dim_hidden
         image_emb = tf.nn.xw_plus_b(image, self.embed_image_W, self.embed_image_b) # (batch_size, dim_hidden)
         image_emb = tf.nn.dropout(image_emb, self.drop_out_rate)
         image_emb = tf.tanh(image_emb)
-
+	#pdb.set_trace()
 	# [answer] ground truth
+	'''
         labels = tf.expand_dims(label, 1) # (batch_size, 1)
         indices = tf.expand_dims(tf.range(0, self.batch_size, 1), 1) # (batch_size, 1)
         concated = tf.concat(1, [indices, labels]) # (batch_size, 2)
         answer = tf.sparse_to_dense(concated, tf.pack([self.batch_size, num_answer]), 1.0, 0.0) # (batch_size, num_answer)
-	
+	'''
+	#pdb.set_trace()	
 	'''
 	# [question_mask] 
 	question_length_exp = tf.expand_dims(question_length, 1) # b x 1
@@ -199,7 +202,7 @@ class Answer_Generator():
 	'''
 	output_final = tf.reduce_sum(tf.mul(output, tf.to_float(question_mask)), 0) # (batch_size, 2*dim_hidden)
 	answer_pred = tf.nn.xw_plus_b(output_final, self.answer_emb_W, self.answer_emb_b) # (batch_size, num_answer)
-        cross_entropy = tf.nn.softmax_cross_entropy_with_logits(answer_pred, answer) # (batch_size, )
+        cross_entropy = tf.nn.softmax_cross_entropy_with_logits(answer_pred, label) # (batch_size, )
 	loss = tf.reduce_sum(cross_entropy)
 	loss = loss/self.batch_size
 
@@ -265,9 +268,9 @@ class Answer_Generator():
 
 ## Train Parameter
 dim_image = 4096
-dim_hidden = 1024
+dim_hidden = 512
 n_epochs = 300
-batch_size = 10
+batch_size = 125
 learning_rate = 0.0001 #0.001
 
 def train():
@@ -278,6 +281,12 @@ def train():
     # count question and caption vocabulary size
     vocabulary_size_q = len(dataset['ix_to_word'].keys())
     
+    # answers = 2 ==> [0,0,1,0....,0]    
+    answers = np.zeros([num_train, num_answer])
+    answers[range(num_train),np.expand_dims(train_data['answers'],1)[:,0]] = 1 # all x num_answers 
+    
+
+    #pdb.set_trace()
     model = Answer_Generator(
             dim_image = dim_image,
             n_words_q = vocabulary_size_q,
@@ -301,61 +310,33 @@ def train():
         np.random.shuffle(index)
         train_data['question'] = train_data['question'][index,:] # (num_train, max_words_q)
 	train_data['length_q'] = train_data['length_q'][index] # (num_train, )
-	train_data['answers'] = train_data['answers'][index]
+	answers = answers[index,:] # num_train x num_answers
         train_data['img_list'] = train_data['img_list'][index]
 	
         tStart_epoch = time.time()
         loss_epoch = np.zeros(num_train)
-	#num_batch = num_train/batch_size + 1
-	#split_batch = np.array_split(np.arange(num_train),num_batch)
-	#for current_batch_file_idx in split_batch:
+
 	for current_batch_start_idx in xrange(0,num_train-1,batch_size):
             tStart = time.time()
             # set data into current*
-	    if current_batch_start_idx + 10 < num_train:
-		current_batch_file_idx = range(current_batch_start_idx,current_batch_start_idx+10)
+	    if current_batch_start_idx + batch_size < num_train:
+		current_batch_file_idx = range(current_batch_start_idx,current_batch_start_idx+batch_size)
 	    else:
 		current_batch_file_idx = range(current_batch_start_idx,num_train)
+	    current_question = np.zeros([batch_size, max_words_q])
+            current_length_q = np.zeros(batch_size)
+            current_answers = np.zeros([batch_size, num_answer])
+            current_img_list = np.zeros(batch_size)
 	    current_question = train_data['question'][current_batch_file_idx,:]
-            #current_wuestion_mask = question_mask[:,current_batch_file_idx,:]
             current_length_q = train_data['length_q'][current_batch_file_idx]
-            current_answers = train_data['answers'][current_batch_file_idx]
+            current_answers = answers[current_batch_file_idx,:]
             current_img_list = train_data['img_list'][current_batch_file_idx]
 	    current_img = np.zeros((batch_size, dim_image))
 	    current_img = img_feature[current_img_list,:] # (batch_size, dim_image)
 	   
 	    current_question_mask = np.zeros([max_words_q, batch_size, 2*dim_hidden])
     	    current_question_mask[current_length_q, range(batch_size), :] = 1 #(max_words_q, batch_size, 2*dim_hidden)
-	    '''
-            # one batch at a time
-            #for idx_batch in xrange(batch_size):
-                #current_img_idx[idx_batch] = current_img_list[idx_batch] # (batch_size, )
-		# minus 1 since in MSCOCO the idx is 0~82459
-		# 		   VQA 	  the idx is 1~82460	
-		#current_img[idx_batch,:] = img_feature[current_img_idx-1] # (batch_size, dim_image)
-		
-                idx = np.where(current_batch['label'][:,ind] != -1)[0]
-                if len(idx) == 0:
-                        continue
-                idy = np.where(current_batch['label'][:,ind] == 1)[0]
-                if len(idy) == 0:
-                        continue
-                current_HLness[ind,idx] = current_batch['label'][idx,ind]
-                current_HLness_masks[ind,idx] = 1
-                current_video_masks[ind,idy[-1]] = 1   	
-	    '''
-	    '''
-	    current_captions = current_batch['title']
-            current_caption_ind = map(lambda cap: [wordtoix[word] for word in cap.lower().split(' ') if word in wordtoix], current_captions)
 
-            current_caption_matrix = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=15-1)
-            current_caption_matrix = np.hstack( [current_caption_matrix, np.zeros( [len(current_caption_matrix),1]) ] ).astype(int)
-            current_caption_masks = np.zeros((current_caption_matrix.shape[0], current_caption_matrix.shape[1]))
-            nonzeros = np.array( map(lambda x: (x != 0).sum()+1, current_caption_matrix ))
-	    
-	    for ind, row in enumerate(current_caption_masks):
-                row[:nonzeros[ind]] = 1
-	    '''
             # do the training process!!!
             _, loss = sess.run(
                     [train_op, tf_loss],
@@ -371,20 +352,32 @@ def train():
             print ("Epoch:", epoch, " Batch:", current_batch_file_idx, " Loss:", loss)
             print ("Time Cost:", round(tStop - tStart,2), "s")
 
-	'''
+	
 	# every 20 epoch: print result
-        if np.mod(epoch, 20) == 0:
-            print "Epoch ", epoch, " is done. Saving the model ..."
+	if np.mod(epoch, 20) == 0:
+            print ("Epoch ", epoch, " is done. Saving the model ...")
             saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
 
+	    '''
             current_batch = h5py.File(test_data[np.random.randint(0,len(test_data))])
-            video_tf, video_mask_tf, HLness_tf, caption_tf, probs_tf, last_embed_tf, state1_tf, state2_tf = model.build_generator()
+            video_tf, video_len_tf, HLness_tf, caption_tf, HLness_att_mask_tf = model.build_generator()
             ixtoword = pd.Series(np.load('./data/ixtoword.npy').tolist())
-            mp = []
-            pred_sent = []
-            gt_sent = []
-            gt_captions = current_batch['title']
-	'''
+            #[mp, pred_sent, gt_sent, HLness] = testing_one(sess, current_batch, ixtoword,video_tf, video_len_tf, HLness_tf, caption_tf, HLness_att_mask_tf)
+            [mp, pred_sent, gt_sent, HLness] = testing_all(sess, test_data, ixtoword,video_tf, video_len_tf, HLness_tf, caption_tf, HLness_att_mask_tf)
+            #for xxx in xrange(current_batch['label'].shape[1]):
+            #   print gt_sent[xxx]
+            #   print pred_sent[xxx]
+            total_score = np.mean(mp)
+            print total_score
+            scorer = COCOScorer()
+            total_score = scorer.score(gt_sent, pred_sent, range(len(pred_sent)))
+	    '''
+    '''
+    print "Finally, saving the model ..."
+    saver.save(sess, os.path.join(model_path, 'model'), global_step=n_epochs)
+    tStop_total = time.time()
+    print "Total Time Cost:", round(tStop_total - tStart_total,2), "s"	
+    '''
 '''
 def test(model_path='models/model-900', video_feat_path=video_feat_path):
 
@@ -443,6 +436,6 @@ def test(model_path='models/model-900', video_feat_path=video_feat_path):
 
 
 if __name__ == '__main__':
-    #with tf.device('/gpu:'+str(6)):
-    #    train()
-    train()
+    with tf.device('/gpu:'+str(15)):
+        train()
+    #train()
