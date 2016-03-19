@@ -1,0 +1,5 @@
+model_checkpoint_path: "/home/andrewliao11/Work/VQA_challenge/model/model-30"
+all_model_checkpoint_paths: "/home/andrewliao11/Work/VQA_challenge/model/model-0"
+all_model_checkpoint_paths: "/home/andrewliao11/Work/VQA_challenge/model/model-10"
+all_model_checkpoint_paths: "/home/andrewliao11/Work/VQA_challenge/model/model-20"
+all_model_checkpoint_paths: "/home/andrewliao11/Work/VQA_challenge/model/model-30"
