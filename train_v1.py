@@ -16,14 +16,26 @@ import pdb
 json_data_path= '/home/andrewliao11/Work/VQA_challenge/data_prepro.json'
 h5_data_path = '/home/andrewliao11/Work/VQA_challenge/data_prepro.h5'
 image_feature_path = '/home/andrewliao11/Work/VQA_challenge/data_img.h5'
-model_path = '/home/andrewliao11/Work/VQA_challenge/model/'
+
 
 ## Some args
 normalize = True
 max_words_q = 26
 num_answer = 1000
 
-def get_data():
+# Check point
+save_checkpoint_every = 25000           # how often to save a model checkpoint?
+model_path = '/home/andrewliao11/Work/VQA_challenge/model/'
+
+## Train Parameter
+dim_image = 4096
+dim_hidden = 512
+n_epochs = 30
+batch_size = 125
+learning_rate = 0.0001 #0.001
+
+
+def get_train_data():
 
     dataset = {}
     train_data = {}
@@ -78,21 +90,17 @@ class Answer_Generator():
         self.drop_out_rate = drop_out_rate
 
 	# 2 layers LSTM cell
-	self.lstm1 = rnn_cell.LSTMCell(self.dim_hidden,self.dim_hidden,use_peepholes = True)
+	self.lstm1 = rnn_cell.LSTMCell(self.dim_hidden, input_size=2*self.dim_hidden, use_peepholes = True)
         self.lstm1_dropout = rnn_cell.DropoutWrapper(self.lstm1,output_keep_prob=1 - self.drop_out_rate)
-        self.lstm2 = rnn_cell.LSTMCell(self.dim_hidden,self.dim_hidden,use_peepholes = True)
+        self.lstm2 = rnn_cell.LSTMCell(self.dim_hidden, input_size=self.dim_hidden, use_peepholes = True)
         self.lstm2_dropout = rnn_cell.DropoutWrapper(self.lstm2,output_keep_prob=1 - self.drop_out_rate)
-	'''
-	self.lstm = rnn_cell.BasicLSTMCell(self.dim_hidden)
-	#self.lstm_dropout = rnn_cell.DropoutWrapper(self.lstm,output_keep_prob=1 - self.drop_out_rate)
-	self.stacked_lstm = rnn_cell.MultiRNNCell([self.lstm] * 2)
-	'''
+	
 	# image feature embedded
-	self.embed_image_W = tf.Variable(tf.random_uniform([dim_image, self.lstm1.state_size], -0.1,0.1), name='embed_image_W')
+	self.embed_image_W = tf.Variable(tf.random_uniform([dim_image, dim_hidden], -0.1,0.1), name='embed_image_W')
 	if bias_init_vector is not None:
             self.embed_image_b = tf.Variable(bias_init_vector.astype(np.float32), name='embed_image_b')
         else:
-            self.embed_image_b = tf.Variable(tf.zeros([self.lstm1.state_size]), name='embed_image_b')
+            self.embed_image_b = tf.Variable(tf.zeros([dim_hidden]), name='embed_image_b')
 	
 	# embed the word into lower space
 	with tf.device("/cpu:0"):
@@ -105,8 +113,6 @@ class Answer_Generator():
         else:
             self.answer_emb_b = tf.Variable(tf.zeros([num_answer]), name='answer_emb_b')	
 
-	# record the final word index
-	# question_mask = tf.Variable(tf.zeros([self.batch_size]),name='question_mask')
 	
 
     def build_model(self):
@@ -128,62 +134,48 @@ class Answer_Generator():
 	probs = []
         loss = 0.0
 
-
-	# -----------------Question Understanding-------------------
-
-	state1 = image_emb #(batch_size, state_size)
-        state2 = image_emb	
+	state1 = tf.zeros([self.batch_size, self.lstm1.state_size])
+        state2 = tf.zeros([self.batch_size, self.lstm2.state_size])
 	states = []
 	outputs = []
+	for j in range(max_words_q): 
+            if j == 0:
+                question_emb = tf.zeros([self.batch_size, self.dim_hidden])
+            else:
+                with tf.device("/cpu:0"):
+		    tf.get_variable_scope().reuse_variables()
+                    question_emb = tf.nn.embedding_lookup(self.question_emb_W, question[:,j-1])
+	    with tf.variable_scope("LSTM1"):
+                output1, state1 = self.lstm1_dropout(tf.concat(1,[image_emb, question_emb]), state1 )
+	    with tf.variable_scope("LSTM2"):
+                output2, state2 = self.lstm2_dropout(output1, state2 )
+
+	    # record the state an output
+	    states.append(state2)
+	    outputs.append(output2)
+	    	
 	
-	for j in range(max_words_q):
-
-	    # TODO: first reuse???
-            tf.get_variable_scope().reuse_variables()
-            question_emb = tf.nn.embedding_lookup(self.question_emb_W, question[:,j])
-
-            with tf.variable_scope("LSTM1"):
-                output1, state1 = self.lstm1_dropout(question_emb, state1)
-            with tf.variable_scope("LSTM2"):
-                output2, state2 = self.lstm2_dropout(output1, state2)
-
-            # record the state an output
-            states.append(state2)
-            outputs.append(output2)
-
-        
-        # pack -> convert input into an array
-        states = tf.pack(states) # (max_words_q, batch_size, 2*dim_hidden)
+	# predict   
+	# pack -> convert input into an array
+	states = tf.pack(states) # (max_words_q, batch_size, 2*dim_hidden)
         state = tf.reduce_sum(tf.mul(states, tf.to_float(question_mask)), 0) # (batch_size, 2*dim_hidden)
-        state = tf.slice(state, [0,0], [self_batch_size, dim_hidden]) # (batch_size, dim_hidden)    	
-
-	# ----------------Attention Extraction---------------------------
-	
-	
-	# Predict
-	answer_pred = tf.nn.xw_plus_b(output_final, self.answer_emb_W, self.answer_emb_b) # (batch_size, num_answer)
+        state = tf.slice(state, [0,0], [self.batch_size, dim_hidden]) # (batch_size, dim_hidden)
+	answer_pred = tf.nn.xw_plus_b(state, self.answer_emb_W, self.answer_emb_b) # (batch_size, num_answer)
         cross_entropy = tf.nn.softmax_cross_entropy_with_logits(answer_pred, label) # (batch_size, )
 	loss = tf.reduce_sum(cross_entropy)
 	loss = loss/self.batch_size
 
 	return loss, image, question, question_mask, question_length, label
 
-## Train Parameter
-dim_image = 4096
-dim_hidden = 512
-n_epochs = 30
-batch_size = 125
-learning_rate = 0.0001 #0.001
-
 def train():
 
     print('Start to load data!')
-    dataset, img_feature, train_data = get_data()
+    dataset, img_feature, train_data = get_train_data()
     num_train = train_data['question'].shape[0]
     # count question and caption vocabulary size
     vocabulary_size_q = len(dataset['ix_to_word'].keys())
     
-    # answer 0 ~ 999    
+    # answers = 2 ==> [0,0,1,0....,0]    
     answers = np.zeros([num_train, num_answer])
     answers[range(num_train),np.expand_dims(train_data['answers'],1)[:,0]] = 1 # all x num_answers 
     
@@ -237,8 +229,7 @@ def train():
 	    current_img = img_feature[current_img_list,:] # (batch_size, dim_image)
 	   
 	    current_question_mask = np.zeros([max_words_q, batch_size, 2*dim_hidden])
-	    # current_length_q -1 = 3 => [0,0,1,0,0,0,..........,0]
-    	    current_question_mask[current_length_q-1, range(batch_size), :] = 1 #(max_words_q, batch_size, 2*dim_hidden)
+    	    current_question_mask[current_length_q, range(batch_size), :] = 1 #(max_words_q, batch_size, 2*dim_hidden)
 
             # do the training process!!!
             _, loss = sess.run(
