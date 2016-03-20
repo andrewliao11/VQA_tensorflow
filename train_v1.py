@@ -1,3 +1,18 @@
+'''
+VisualQA:
+
+[baseline]
+Method:
+treat image as the first question word as input
+and take the last "state" as the answer predicted
+
+Architecture:
+change the LSTM size
+2-layer LSTM
+
+1 batch(125): 0.26s
+1 epoch: 345s
+'''
 from __future__ import print_function
 import tensorflow as tf
 import pandas as pd
@@ -30,7 +45,7 @@ model_path = '/home/andrewliao11/Work/VQA_challenge/model/'
 ## Train Parameter
 dim_image = 4096
 dim_hidden = 512
-n_epochs = 30
+n_epochs = 100
 batch_size = 125
 learning_rate = 0.0001 #0.001
 
@@ -248,7 +263,7 @@ def train():
 
 	
 	# every 10 epoch: print result
-	if np.mod(epoch, 10) == 0:
+	if np.mod(epoch, 20) == 0:
             print ("Epoch ", epoch, " is done. Saving the model ...")
             saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
 	print ("Epoch:", epoch, " done. Loss:", np.mean(loss_epoch))

@@ -1,3 +1,15 @@
+'''
+VisualQA:
+
+[baseline]
+Method:
+treat image as the first question word as input 
+and take the last "output" as the answer predicted
+Architecture:
+2-layer LSTM 
+
+1 batch(125): 0.84s
+'''
 from __future__ import print_function
 import tensorflow as tf
 import pandas as pd
@@ -26,6 +38,14 @@ num_answer = 1000
 # Check point
 save_checkpoint_every = 25000           # how often to save a model checkpoint?
 model_path = '/home/andrewliao11/Work/VQA_challenge/model/'
+
+## Train Parameter
+dim_image = 4096
+dim_hidden = 512
+n_epochs = 30
+batch_size = 125
+learning_rate = 0.0001 #0.001
+
 
 def get_data():
 
@@ -164,13 +184,6 @@ class Answer_Generator():
 	loss = loss/self.batch_size
 
 	return loss, image, question, question_mask, question_length, label
-
-## Train Parameter
-dim_image = 4096
-dim_hidden = 512
-n_epochs = 30
-batch_size = 125
-learning_rate = 0.0001 #0.001
 
 def train():
 
