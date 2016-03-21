@@ -37,12 +37,12 @@ num_answer = 1000
 
 # Check point
 save_checkpoint_every = 25000           # how often to save a model checkpoint?
-model_path = '/home/andrewliao11/Work/VQA_challenge/model/'
+model_path = '/home/andrewliao11/Work/VQA_challenge/models/vanilla/'
 
 ## Train Parameter
 dim_image = 4096
 dim_hidden = 512
-n_epochs = 30
+n_epochs = 100
 batch_size = 125
 learning_rate = 0.0001 #0.001
 

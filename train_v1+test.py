@@ -40,14 +40,15 @@ num_answer = 1000
 
 # Check point
 save_checkpoint_every = 25000           # how often to save a model checkpoint?
-model_path = '/home/andrewliao11/Work/VQA_challenge/models/vanilla_state/'
+model_path = '/home/andrewliao11/Work/VQA_challenge/models/'
 
 ## Train Parameter
 dim_image = 4096
 dim_hidden = 512
-n_epochs = 100
+n_epochs = 300
 batch_size = 125
 learning_rate = 0.0001 #0.001
+
 
 
 def get_train_data():
@@ -93,6 +94,45 @@ def get_train_data():
 	img_feature = np.divide(img_feature, np.tile(tem,(1,4096)))
 
     return dataset, img_feature, train_data
+
+def get_test_data():
+
+    dataset = {}
+    test_data = {}
+    # load json file
+    print('Loading json file...')
+    with open(json_data_path) as data_file:
+        data = json.load(data_file)
+    for key in data.keys():
+        dataset[key] = data[key]
+
+    # load image feature
+    print('Loading image feature...')
+    with h5py.File(image_feature_path,'r') as hf:
+        tem = hf.get('images_train')
+        img_feature = np.array(tem)
+    # load h5 file
+    print('Loading h5 file...')
+    with h5py.File(h5_data_path,'r') as hf:
+        tem = hf.get('ques_train')
+        test_data['question'] = np.array(tem)
+        test_data['question'] = test_data['question'][0:500]
+        tem = hf.get('ques_length_train')
+        test_data['length_q'] = np.array(tem)
+        test_data['length_q'] = test_data['length_q'][0:500]
+        tem = hf.get('img_pos_train')
+        test_data['img_list'] = np.array(tem)-1
+        test_data['img_list'] = test_data['img_list'][0:500]
+        tem = hf.get('answers')
+        test_data['answers'] = np.array(tem)-1
+	test_data['answers'] = test_data['answers'][0:500]
+
+    print('Normalizing image feature')
+    if normalize:
+        tem =  np.sqrt(np.sum(np.multiply(img_feature, img_feature)))
+        img_feature = np.divide(img_feature, np.tile(tem,(1,4096)))
+
+    return dataset, img_feature, test_data
 
 
 class Answer_Generator():
@@ -182,6 +222,52 @@ class Answer_Generator():
 
 	return loss, image, question, question_mask, question_length, label
 
+    def build_generator(self):
+
+    	image = tf.placeholder(tf.float32, [self.batch_size, self.dim_image])  # (batch_size, dim_image)
+    	question = tf.placeholder(tf.int32, [self.batch_size, max_words_q])
+    	question_length = tf.placeholder(tf.int32, [self.batch_size])
+   	question_mask = tf.placeholder(tf.int32, [max_words_q, self.batch_size, 2*self.dim_hidden])
+
+	# [image] embed image feature to dim_hidden
+        image_emb = tf.nn.xw_plus_b(image, self.embed_image_W, self.embed_image_b) # (batch_size, dim_hidden)
+        image_emb = tf.nn.dropout(image_emb, self.drop_out_rate)
+        image_emb = tf.tanh(image_emb)
+
+        probs = []
+        loss = 0.0
+
+        state1 = tf.zeros([self.batch_size, self.lstm1.state_size])
+        state2 = tf.zeros([self.batch_size, self.lstm2.state_size])
+        states = []
+        outputs = []
+
+	for j in range(max_words_q):
+            if j == 0:
+                question_emb = tf.zeros([self.batch_size, self.dim_hidden])
+            else:
+                with tf.device("/cpu:0"):
+                    tf.get_variable_scope().reuse_variables()
+                    question_emb = tf.nn.embedding_lookup(self.question_emb_W, question[:,j-1])
+            with tf.variable_scope("LSTM1"):
+                output1, state1 = self.lstm1_dropout(tf.concat(1,[image_emb, question_emb]), state1 )
+            with tf.variable_scope("LSTM2"):
+                output2, state2 = self.lstm2_dropout(output1, state2 )
+
+            # record the state an output
+            states.append(state2)
+            outputs.append(output2)
+
+        # predict
+        # pack -> convert input into an array
+        states = tf.pack(states) # (max_words_q, batch_size, 2*dim_hidden)
+        state = tf.reduce_sum(tf.mul(states, tf.to_float(question_mask)), 0) # (batch_size, 2*dim_hidden)
+        state = tf.slice(state, [0,0], [self.batch_size, dim_hidden]) # (batch_size, dim_hidden)
+        answer_pred = tf.nn.xw_plus_b(state, self.answer_emb_W, self.answer_emb_b) # (batch_size, num_answer)
+	generated_ans = tf.argmax(answer_pred, 1) # b
+
+    	return generated_ans, image, question, question_mask, question_length
+
 def train():
 
     print('Start to load data!')
@@ -262,10 +348,12 @@ def train():
             print ("Time Cost:", round(tStop - tStart,2), "s")
 
 	
-	# every 10 epoch: print result
+	# every 20 epoch: print result
 	if np.mod(epoch, 20) == 0:
             print ("Epoch ", epoch, " is done. Saving the model ...")
             saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
+	    accuracy = test(model_path='models/model-'+str(epoch))
+	    #np.savez('result_train/'+model_path.split('/')[1],accuracy = accuracy)
 	print ("Epoch:", epoch, " done. Loss:", np.mean(loss_epoch))
         tStop_epoch = time.time()
         print ("Epoch Time Cost:", round(tStop_epoch - tStart_epoch,2), "s")
@@ -276,6 +364,76 @@ def train():
     print ("Total Time Cost:", round(tStop_total - tStart_total,2), "s")	
 
 
+def test(model_path='models/model-300'):
+
+    print('Start to load data!')
+    dataset, img_feature, test_data = get_test_data()
+    num_test = test_data['question'].shape[0]
+    # count question and caption vocabulary size
+    vocabulary_size_q = len(dataset['ix_to_word'].keys())
+
+    model = Answer_Generator(
+            dim_image = dim_image,
+            n_words_q = vocabulary_size_q,
+            dim_hidden = dim_hidden,
+            batch_size = batch_size,
+            drop_out_rate = 0,
+            bias_init_vector = None)
+
+    tf_generated_ans, tf_image, tf_question, tf_question_mask, tf_question_length = model.build_generator()
+
+    sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
+    saver = tf.train.Saver()
+    saver.restore(sess, model_path)
+    tf.initialize_all_variables().run()
+
+    num_Y = 0
+    tStart_total = time.time()
+    for current_batch_start_idx in xrange(0,num_test-1,batch_size):
+	tStart = time.time()
+        # set data into current*
+        if current_batch_start_idx + batch_size < num_test:
+            current_batch_file_idx = range(current_batch_start_idx,current_batch_start_idx+batch_size)
+        else:
+            current_batch_file_idx = range(current_batch_start_idx,num_test)
+        current_question = np.zeros([batch_size, max_words_q])
+        current_length_q = np.zeros(batch_size)
+        current_img_list = np.zeros(batch_size)
+	current_answers = np.zeros(batch_size)
+        current_question = test_data['question'][current_batch_file_idx,:]
+        current_length_q = test_data['length_q'][current_batch_file_idx]
+        current_img_list = test_data['img_list'][current_batch_file_idx]
+	current_answers = test_data['answers'][current_batch_file_idx]
+        current_img = np.zeros((batch_size, dim_image))
+        current_img = img_feature[current_img_list,:] # (batch_size, dim_image)
+
+        current_question_mask = np.zeros([max_words_q, batch_size, 2*dim_hidden])
+        current_question_mask[current_length_q, range(batch_size), :] = 1 #(max_words_q, batch_size, 2*dim_hidden)
+
+	# do the testing process!!!
+        generated_ans = sess.run(
+                tf_generated_ans,
+                feed_dict={
+                    tf_image: current_img,
+                    tf_question: current_question,
+                    tf_question_length: current_length_q,
+                    tf_question_mask: current_question_mask
+                    })
+        #predicted[current_batch_file_idx] = generated_ans
+	num_Y += np.where(generated_ans-current_answers==0)[0].shape[0]
+        tStop = time.time()
+        print ("Testing batch: ", current_batch_file_idx)
+        print ("Time Cost:", round(tStop - tStart,2), "s")
+    
+    accuracy = float(num_Y)/float(num_test);
+    print ("Testing done.")
+    print ("Accuracy = ",accuracy)
+    tStop_total = time.time()
+    print ("Total Time Cost:", round(tStop_total - tStart_total,2), "s")
+
+    return accuracy
+
 if __name__ == '__main__':
-    with tf.device('/gpu:'+str(12)):
-        train()
+    #with tf.device('/gpu:'+str(10)):
+    #    train()
+    test()
