@@ -188,7 +188,7 @@ def train():
     dataset, img_feature, train_data = get_train_data()
     num_train = train_data['question'].shape[0]
     # count question and caption vocabulary size
-    vocabulary_size_q = len(dataset['ix_to_word'].keys())
+    vocabulary_size_q = len(dataset['ix_to_word'].keys())+1
     
     # answers = 2 ==> [0,0,1,0....,0]    
     answers = np.zeros([num_train, num_answer])
@@ -277,5 +277,5 @@ def train():
 
 
 if __name__ == '__main__':
-    with tf.device('/gpu:'+str(12)):
+    with tf.device('/gpu:'+str(3)):
         train()

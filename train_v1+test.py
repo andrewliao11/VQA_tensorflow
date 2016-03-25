@@ -96,42 +96,43 @@ def get_train_data():
     return dataset, img_feature, train_data
 
 def get_test_data():
-
     dataset = {}
     test_data = {}
     # load json file
-    print('Loading json file...')
+    print('loading json file...')
     with open(json_data_path) as data_file:
         data = json.load(data_file)
     for key in data.keys():
         dataset[key] = data[key]
 
     # load image feature
-    print('Loading image feature...')
+    print('loading image feature...')
     with h5py.File(image_feature_path,'r') as hf:
+        # -----0~82459------
         tem = hf.get('images_train')
         img_feature = np.array(tem)
+        #dataset['fv_im'] = np.array(tem)
     # load h5 file
-    print('Loading h5 file...')
+    print('loading h5 file...')
     with h5py.File(h5_data_path,'r') as hf:
-        tem = hf.get('ques_train')
+        # total number of training data is 215375
+        # question is (26, )
+        tem = hf.get('ques_test')
         test_data['question'] = np.array(tem)
-        test_data['question'] = test_data['question'][0:500]
-        tem = hf.get('ques_length_train')
+        # max length is 23
+        tem = hf.get('ques_length_test')
         test_data['length_q'] = np.array(tem)
-        test_data['length_q'] = test_data['length_q'][0:500]
-        tem = hf.get('img_pos_train')
+        # total 82460 img
+        # -----1~82460-----
+        tem = hf.get('img_pos_test')
+        # convert into 0~82459
         test_data['img_list'] = np.array(tem)-1
-        test_data['img_list'] = test_data['img_list'][0:500]
-        tem = hf.get('answers')
-        test_data['answers'] = np.array(tem)-1
-	test_data['answers'] = test_data['answers'][0:500]
-
-    print('Normalizing image feature')
-    if normalize:
-        tem =  np.sqrt(np.sum(np.multiply(img_feature, img_feature)))
-        img_feature = np.divide(img_feature, np.tile(tem,(1,4096)))
-
+        # quiestion id
+        tem = hf.get('question_id_test')
+        test_data['ques_id'] = np.array(tem)
+        # MC_answer_test
+        tem = hf.get('MC_ans_test')
+        test_data['MC_ans_test'] = np.array(tem)
     return dataset, img_feature, test_data
 
 
@@ -352,7 +353,7 @@ def train():
 	if np.mod(epoch, 20) == 0:
             print ("Epoch ", epoch, " is done. Saving the model ...")
             saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
-	    accuracy = test(model_path='models/model-'+str(epoch))
+	    #accuracy = test(model_path='models/model-'+str(epoch))
 	    #np.savez('result_train/'+model_path.split('/')[1],accuracy = accuracy)
 	print ("Epoch:", epoch, " done. Loss:", np.mean(loss_epoch))
         tStop_epoch = time.time()
@@ -364,8 +365,9 @@ def train():
     print ("Total Time Cost:", round(tStop_total - tStart_total,2), "s")	
 
 
-def test(model_path='models/model-300'):
+def test(model_path='models/vanilla_state/model-100'):
 
+    batch_size = 2
     print('Start to load data!')
     dataset, img_feature, test_data = get_test_data()
     num_test = test_data['question'].shape[0]
@@ -388,6 +390,7 @@ def test(model_path='models/model-300'):
     tf.initialize_all_variables().run()
 
     num_Y = 0
+    result = []
     tStart_total = time.time()
     for current_batch_start_idx in xrange(0,num_test-1,batch_size):
 	tStart = time.time()
@@ -403,7 +406,7 @@ def test(model_path='models/model-300'):
         current_question = test_data['question'][current_batch_file_idx,:]
         current_length_q = test_data['length_q'][current_batch_file_idx]
         current_img_list = test_data['img_list'][current_batch_file_idx]
-	current_answers = test_data['answers'][current_batch_file_idx]
+	current_ques_id = test_data['ques_id'][current_batch_file_idx]
         current_img = np.zeros((batch_size, dim_image))
         current_img = img_feature[current_img_list,:] # (batch_size, dim_image)
 
@@ -420,18 +423,27 @@ def test(model_path='models/model-300'):
                     tf_question_mask: current_question_mask
                     })
         #predicted[current_batch_file_idx] = generated_ans
-	num_Y += np.where(generated_ans-current_answers==0)[0].shape[0]
+	#num_Y += np.where(generated_ans-current_answers==0)[0].shape[0]
+	for i in xrange(0,batch_size):
+            ans = dataset['ix_to_ans'][str(generated_ans[i]+1)]
+            if(current_ques_id[i] == 0):
+                continue
+            result.append({u'answer': ans, u'question_id': str(current_ques_id[i])})
         tStop = time.time()
         print ("Testing batch: ", current_batch_file_idx)
         print ("Time Cost:", round(tStop - tStart,2), "s")
     
-    accuracy = float(num_Y)/float(num_test);
+    #accuracy = float(num_Y)/float(num_test);
     print ("Testing done.")
-    print ("Accuracy = ",accuracy)
+    # Save to JSON
+    print ('Saving result...')
+    my_list = list(result)
+    dd = json.dump(my_list,open('data.json','w'))
+    #print ("Accuracy = ",accuracy)
     tStop_total = time.time()
     print ("Total Time Cost:", round(tStop_total - tStart_total,2), "s")
 
-    return accuracy
+    #return accuracy
 
 if __name__ == '__main__':
     #with tf.device('/gpu:'+str(10)):
