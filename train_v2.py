@@ -41,6 +41,7 @@ num_answer = 1000
 # Check point
 save_checkpoint_every = 25000           # how often to save a model checkpoint?
 model_path = '/home/andrewliao11/Work/VQA_challenge/models/vanilla_state/'
+writer_path = 'home/andrewliao11/Work/VQA_challenge/tmp/tf_log/vanilla_state'
 
 ## Train Parameter
 dim_image = 4096
@@ -295,7 +296,7 @@ def train():
     tf_loss, tf_image, tf_question, tf_question_mask, tf_question_length, tf_label = model.build_model()
     
     sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
-    writer = tf.train.SummaryWriter('/home/andrewliao11/Work/VQA_challenge/tmp/tf_log', sess.graph_def)
+    writer = tf.train.SummaryWriter(writer_path, sess.graph_def)
     saver = tf.train.Saver(max_to_keep=100)
     train_op = tf.train.AdamOptimizer(learning_rate).minimize(tf_loss)
     tf.initialize_all_variables().run()
@@ -356,8 +357,6 @@ def train():
 	if np.mod(epoch, 20) == 0:
             print ("Epoch ", epoch, " is done. Saving the model ...")
             saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
-	    #accuracy = test(model_path='models/model-'+str(epoch))
-	    #np.savez('result_train/'+model_path.split('/')[1],accuracy = accuracy)
 	print ("Epoch:", epoch, " done. Loss:", np.mean(loss_epoch))
         tStop_epoch = time.time()
         print ("Epoch Time Cost:", round(tStop_epoch - tStart_epoch,2), "s")
@@ -425,8 +424,6 @@ def test(model_path='models/vanilla_state/model-100'):
                     tf_question_length: current_length_q,
                     tf_question_mask: current_question_mask
                     })
-        #predicted[current_batch_file_idx] = generated_ans
-	#num_Y += np.where(generated_ans-current_answers==0)[0].shape[0]
 	for i in xrange(0,batch_size):
             ans = dataset['ix_to_ans'][str(generated_ans[i]+1)]
             if(current_ques_id[i] == 0):
@@ -436,13 +433,11 @@ def test(model_path='models/vanilla_state/model-100'):
         print ("Testing batch: ", current_batch_file_idx)
         print ("Time Cost:", round(tStop - tStart,2), "s")
     
-    #accuracy = float(num_Y)/float(num_test);
     print ("Testing done.")
     # Save to JSON
     print ('Saving result...')
     my_list = list(result)
     dd = json.dump(my_list,open('data.json','w'))
-    #print ("Accuracy = ",accuracy)
     tStop_total = time.time()
     print ("Total Time Cost:", round(tStop_total - tStart_total,2), "s")
 
