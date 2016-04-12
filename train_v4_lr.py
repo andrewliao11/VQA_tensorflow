@@ -35,8 +35,8 @@ batch_size = 125
 TRAIN = True
 TEST = False
 normalize = True
-gpu_id = str(2)
-model_name = 'ABC_LSTM'
+gpu_id = str(1)
+model_name = 'ABC_LSTM_lr'
 
 # Some path
 json_data_path= '/home/andrewliao11/Work/VQA_challenge/data_prepro.json'
@@ -55,7 +55,7 @@ num_answer = 1000
 dim_image = 4096
 dim_hidden = 512
 word_emb = 200
-start_lr_rate = 0.001
+start_lr_rate = 0.01
 kernel_h = 2
 kernel_w = 2
 att_c =5
@@ -444,7 +444,6 @@ def train():
             print ("Epoch:", epoch, " Batch:", current_batch_file_idx, " Loss:", loss)
             print ("Time Cost:", round(tStop - tStart,2), "s")
 
-	global_step = tf.add(global_step,1)	
 	# every 20 epoch: print result
 	if np.mod(epoch, 20) == 0:
             print ("Epoch ", epoch, " is done. Saving the model ...")

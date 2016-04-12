@@ -11,7 +11,7 @@ Architecture:
 =answer generation
 
 TITAN X
-1 batch(125): 0.36s
+1 batch(125): 1.5s
 '''
 from __future__ import print_function
 import tensorflow as tf
@@ -28,15 +28,12 @@ import json
 import pdb
 from scipy import io
 
-
-## Train Parameter
-n_epochs = 100
-batch_size = 125
 TRAIN = True
 TEST = False
 normalize = True
-gpu_id = str(2)
-model_name = 'ABC_LSTM'
+gpu_id = str(3)
+
+model_name = 'ABC_v4'
 
 # Some path
 json_data_path= '/home/andrewliao11/Work/VQA_challenge/data_prepro.json'
@@ -44,7 +41,9 @@ h5_data_path = '/home/andrewliao11/Work/VQA_challenge/data_prepro.h5'
 image_feature_path = '/home/andrewliao11/Work/VQA_challenge/data_img.h5'
 train_fcn_path = '/data/andrewliao11/FCN/train2014'
 #test_fcn_path = '/media/VSlab3/andrewliao11/FCN/fc7/val2014'
+
 model_test = 'models/'+model_name+'/model-100' # default value
+
 meta_path = '/home/andrewliao11/Work/VQA_challenge/meta/'+model_name
 model_path = '/home/andrewliao11/Work/VQA_challenge/models/'+model_name+'/'
 writer_path = '/home/andrewliao11/Work/VQA_challenge/tmp/'+model_name
@@ -52,16 +51,18 @@ writer_path = '/home/andrewliao11/Work/VQA_challenge/tmp/'+model_name
 ## Some args
 max_words_q = 26
 num_answer = 1000
-dim_image = 4096
-dim_hidden = 512
-word_emb = 200
-start_lr_rate = 0.001
 kernel_h = 2
 kernel_w = 2
-att_c =5
 save_checkpoint_every = 25000           # how often to save a model checkpoint?
-decay_e = 100000	# decay every 100000 updates
-decay_rate = 0.9	# decay 0.9 times
+
+
+## Train Parameter
+dim_image = 4096
+dim_hidden = 512
+n_epochs = 100
+batch_size = 125
+learning_rate = 0.0001 #0.001
+
 
 
 def get_train_data():
@@ -177,11 +178,11 @@ class Answer_Generator():
         self.drop_out_rate = drop_out_rate
 
 	# 2 layers LSTM cell
-	self.lstm1 = rnn_cell.LSTMCell(self.dim_hidden, input_size=word_emb, use_peepholes = True)
+	self.lstm1 = rnn_cell.LSTMCell(self.dim_hidden, input_size=self.dim_hidden, use_peepholes = True)
         self.lstm1_dropout = rnn_cell.DropoutWrapper(self.lstm1,output_keep_prob=1 - self.drop_out_rate)
         self.lstm2 = rnn_cell.LSTMCell(self.dim_hidden, input_size=self.dim_hidden, use_peepholes = True)
         self.lstm2_dropout = rnn_cell.DropoutWrapper(self.lstm2,output_keep_prob=1 - self.drop_out_rate)
-	
+
 	###
 	# embed feature to answer space	
 	# [image]
@@ -189,10 +190,10 @@ class Answer_Generator():
 	# [sentence]                                                                                                                          
         self.emb_sentence_W = tf.Variable(tf.random_uniform([self.dim_hidden, num_answer], -0.1, 0.1), name='embed_sentence_W')
 	# [attention map]
-        self.emb_att_W = tf.Variable(tf.random_uniform([13*13*att_c, num_answer], -0.1, 0.1), name='embed_att_W')
+        self.emb_att_W = tf.Variable(tf.random_uniform([13*13, num_answer], -0.1, 0.1), name='embed_att_W')
 
 	# [question]
-        self.question_emb_W = tf.Variable(tf.random_uniform([n_words_q, word_emb], -0.1, 0.1), name='question_emb_W')
+        self.question_emb_W = tf.Variable(tf.random_uniform([n_words_q, dim_hidden], -0.1, 0.1), name='question_emb_W')
 
 	# embed lower space into answer
 	if bias_init_vector is not None:
@@ -201,7 +202,7 @@ class Answer_Generator():
             self.answer_emb_b = tf.Variable(tf.zeros([num_answer]), name='answer_emb_b')	
 
 	# kernel emb
-	self.kernel_emb_W = tf.Variable(tf.random_uniform([dim_hidden, self.kernel_h*self.kernel_w*1024*att_c], -0.1, 0.1), name='kerenl_emb_W')	
+	self.kernel_emb_W = tf.Variable(tf.random_uniform([dim_hidden, self.kernel_h*self.kernel_w*1024], -0.1, 0.1), name='kerenl_emb_W')	
 
     def build_model(self):
 	
@@ -224,7 +225,7 @@ class Answer_Generator():
 	outputs = []
 	for j in range(max_words_q): 
             if j == 0:
-                question_emb = tf.zeros([self.batch_size, word_emb])
+                question_emb = tf.zeros([self.batch_size, self.dim_hidden])
             else:
                 with tf.device("/cpu:0"):
 		    tf.get_variable_scope().reuse_variables()
@@ -233,6 +234,7 @@ class Answer_Generator():
                 output1, state1 = self.lstm1_dropout(question_emb, state1)
 	    with tf.variable_scope("LSTM2"):
                 output2, state2 = self.lstm2_dropout(output1, state2 )
+
 	    # record the state an output
 	    states.append(state2)
 	    outputs.append(output2)
@@ -243,17 +245,17 @@ class Answer_Generator():
         state = tf.slice(state, [0,0], [self.batch_size, dim_hidden]) # (batch_size, dim_hidden)
 	
 	#------------------------Attention Map-------------------------------
-	kernel = tf.matmul(state, self.kernel_emb_W) # (batch_size, kernel_w*kernel_h*1024*att_c)
-	kernel = tf.reshape(kernel,[self.batch_size, self.kernel_h, self.kernel_w, 1024, att_c])
-	kernel = tf.nn.dropout(kernel, 1-self.drop_out_rate) # (batch_size, kernel_h, kernel_w, 1024, att_c)
+	kernel = tf.matmul(state, self.kernel_emb_W) # (batch_size, kernel_w*kernel_h*1024)
+	kernel = tf.reshape(kernel,[self.batch_size, self.kernel_h, self.kernel_w, 1024, 1])
+	kernel = tf.nn.dropout(kernel, 1-self.drop_out_rate) # (batch_size, kernel_h, kernel_w, 1024, 1)
 	kenel = tf.tanh(kernel)
 	# conv2d
 	att_maps = []
 	for j in range(self.batch_size):
 	    att_map = tf.nn.conv2d(tf.reshape(fcn[j,:,:,:],[1,13,13,1024]), kernel[j,:,:,:,:], [1,1,1,1], padding='SAME')
 	    att_maps.append(att_map)
-	att_maps = tf.pack(att_maps) # (batch_size, 13,13,att_c)
-	att_flatten = tf.reshape(att_maps,[self.batch_size,-1]) # flatten the vector (batch_size, 13*13*att_c)
+	att_maps = tf.pack(att_maps) # (batch_size, 13*13)
+	att_flatten = tf.reshape(att_maps,[self.batch_size,-1]) # flatten the vector (batch_size, 13*13)
 
 	#------------------------Answer Generation----------------------------
 	# [image] embed image feature to dim_hidden
@@ -385,10 +387,7 @@ def train():
     sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
     writer = tf.train.SummaryWriter(writer_path, sess.graph_def)
     saver = tf.train.Saver(max_to_keep=100)
-    step = tf.Variable(0, trainable=False)
-    # decay every 10 epoch
-    learning_rate = tf.train.exponential_decay(start_lr_rate, step, decay_e, decay_rate)
-    train_op = tf.train.AdamOptimizer(learning_rate).minimize(tf_loss,global_step = step)
+    train_op = tf.train.AdamOptimizer(learning_rate).minimize(tf_loss)
     tf.initialize_all_variables().run()
     
     tStart_total = time.time()
@@ -444,7 +443,7 @@ def train():
             print ("Epoch:", epoch, " Batch:", current_batch_file_idx, " Loss:", loss)
             print ("Time Cost:", round(tStop - tStart,2), "s")
 
-	global_step = tf.add(global_step,1)	
+	
 	# every 20 epoch: print result
 	if np.mod(epoch, 20) == 0:
             print ("Epoch ", epoch, " is done. Saving the model ...")

@@ -35,8 +35,8 @@ batch_size = 125
 TRAIN = True
 TEST = False
 normalize = True
-gpu_id = str(2)
-model_name = 'ABC_LSTM'
+gpu_id = str(0)
+model_name = 'ABC_LSTM_lr_v1'
 
 # Some path
 json_data_path= '/home/andrewliao11/Work/VQA_challenge/data_prepro.json'
@@ -55,13 +55,13 @@ num_answer = 1000
 dim_image = 4096
 dim_hidden = 512
 word_emb = 200
-start_lr_rate = 0.001
+start_lr_rate = 0.01 # 0.0001,0.002,
 kernel_h = 2
 kernel_w = 2
 att_c =5
 save_checkpoint_every = 25000           # how often to save a model checkpoint?
-decay_e = 100000	# decay every 100000 updates
-decay_rate = 0.9	# decay 0.9 times
+decay_e = 1723		# decay every 100000 updates
+decay_rate = 0.9	# decay 0.95 times
 
 
 def get_train_data():
@@ -214,7 +214,6 @@ class Answer_Generator():
 	label = tf.to_float(label)
 	fcn = tf.placeholder(tf.float32, [self.batch_size, 13, 13, 1024])
 
-	probs = []
         loss = 0.0
 
 	#-----------------------Question Understanding--------------------------
@@ -288,9 +287,6 @@ class Answer_Generator():
     	question = tf.placeholder(tf.int32, [self.batch_size, max_words_q])
    	question_mask = tf.placeholder(tf.int32, [max_words_q, self.batch_size, 2*self.dim_hidden])
 	fcn = tf.placeholder(tf.float32, [self.batch_size, 13, 13, 1024])
-	# [image] embed image feature to dim_hidden
-
-        probs = []
 
 	#-----------------------Question Understanding--------------------------
         state1 = tf.zeros([self.batch_size, self.lstm1.state_size])
@@ -444,7 +440,6 @@ def train():
             print ("Epoch:", epoch, " Batch:", current_batch_file_idx, " Loss:", loss)
             print ("Time Cost:", round(tStop - tStart,2), "s")
 
-	global_step = tf.add(global_step,1)	
 	# every 20 epoch: print result
 	if np.mod(epoch, 20) == 0:
             print ("Epoch ", epoch, " is done. Saving the model ...")
