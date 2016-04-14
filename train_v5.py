@@ -31,11 +31,11 @@ from scipy import io
 
 ## Train Parameter
 n_epochs = 100
-batch_size = 125
+batch_size = 25
 TRAIN = True
 TEST = False
-normalize = True
-gpu_id = str(1)
+normalize = False
+gpu_id = str(3)
 model_name = 'ABC_v5'
 
 # Some path
@@ -59,7 +59,7 @@ word_emb = 256
 start_lr_rate = 0.1 # 0.0001,0.002,
 kernel_h = 3
 kernel_w = 3
-att_c = 1
+#att_c = 1
 save_checkpoint_every = 25000           # how often to save a model checkpoint?
 decay_e = 1723		# decay every 100000 updates
 decay_rate = 0.9	# decay 0.95 times
@@ -187,11 +187,11 @@ class Answer_Generator():
         self.question_emb_W = tf.Variable(tf.random_uniform([n_words_q, word_emb], -0.1, 0.1), name='question_emb_W')
 
 	# [kernel]
-        self.kernel_emb_W = tf.Variable(tf.random_uniform([dim_hidden, self.kernel_h*self.kernel_w*1024*att_c], -0.1, 0.1), name='kerenl_emb_W')
+        self.kernel_emb_W = tf.Variable(tf.random_uniform([dim_hidden, self.kernel_h*self.kernel_w*1024*1], -0.1, 0.1), name='kerenl_emb_W')
 	if bias_init_vector is not None:
             self.kernel_emb_b = tf.Variable(bias_init_vector.astype(np.float32), name='kernel_emb_b')
         else:
-            self.kernel_emb_b = tf.Variable(tf.zeros([self.kernel_h*self.kernel_w*1024*att_c]), name='kernel_emb_b')
+            self.kernel_emb_b = tf.Variable(tf.zeros([self.kernel_h*self.kernel_w*1024*1]), name='kernel_emb_b')
 
 	# embed feature to answer space	
 	# [image]
@@ -204,7 +204,7 @@ class Answer_Generator():
             self.emb_att_b = tf.Variable(bias_init_vector.astype(np.float32), name='embed_att_b')
         else:
             self.emb_att_b = tf.Variable(tf.zeros([dim_hidden]), name='embed_att_b')
-
+	self.att_W = tf.Variable(tf.random_uniform([self.dim_hidden, self.dim_hidden], -0.1,0.1,name = 'att_W'))
 	# [h]
 	if bias_init_vector is not None:
             self.h_emb_b = tf.Variable(bias_init_vector.astype(np.float32), name='h_emb_b')
@@ -226,10 +226,10 @@ class Answer_Generator():
 	# placeholder is for feeding data
 	image = tf.placeholder(tf.float32, [self.batch_size, self.dim_image])  # (batch_size, dim_image)
 	question = tf.placeholder(tf.int32, [self.batch_size, max_words_q])
-	question_mask = tf.placeholder(tf.int32, [max_words_q, self.batch_size, 2*self.dim_hidden])
-	label = tf.placeholder(tf.int32, [self.batch_size, num_answer]) # (batch_size, )
-	label = tf.to_float(label)
+	question_mask = tf.placeholder(tf.int32, [max_words_q+1, self.batch_size, 2*self.dim_hidden])
+	answer = tf.placeholder(tf.float32, [self.batch_size, num_answer]) # (batch_size, )
 	fcn = tf.placeholder(tf.float32, [self.batch_size, 13, 13, 1024])
+	length_q = tf.placeholder(tf.float32, [self.batch_size])
 
         loss = 0.0
 
@@ -238,7 +238,7 @@ class Answer_Generator():
         state2 = tf.zeros([self.batch_size, self.lstm2.state_size])
 	states = []
 	outputs = []
-	for j in range(max_words_q): 
+	for j in range(max_words_q+1): 
             if j == 0:
                 question_emb = tf.zeros([self.batch_size, word_emb])
             else:
@@ -258,10 +258,14 @@ class Answer_Generator():
 	state = tf.pack(states) # (max_words_q, batch_size, 2*dim_hidden)
         state = tf.reduce_sum(tf.mul(state, tf.to_float(question_mask)), 0) # (batch_size, 2*dim_hidden)
         state = tf.slice(state, [0,0], [self.batch_size, dim_hidden]) # (batch_size, dim_hidden)
+	length = tf.expand_dims(length_q, 1) # (batch_size, 1)
+	length = tf.tile(length, [1,dim_hidden]) # (batch_size, dim_hidden))
+	state = tf.div(state, length)
 	
 	#------------------------Attention Map-------------------------------
-	kernel = tf.nn.xw_plus_b(state, self.kernel_emb_W, self.kernel_emb_b) # (batch_size, kernel_w*kernel_h*1024*att_c)
-	kernel = tf.reshape(kernel,[self.batch_size, self.kernel_h, self.kernel_w, 1024, att_c])
+	# output channel is 1
+	kernel = tf.nn.xw_plus_b(state, self.kernel_emb_W, self.kernel_emb_b) # (batch_size, kernel_w*kernel_h*1024*1)
+	kernel = tf.reshape(kernel,[self.batch_size, self.kernel_h, self.kernel_w, 1024, 1])
 	#kernel = tf.nn.dropout(kernel, 1-self.drop_out_rate) # (batch_size, kernel_h, kernel_w, 1024, att_c)
 	kernel = tf.sigmoid(kernel)
 	# conv2d
@@ -269,25 +273,27 @@ class Answer_Generator():
 	for j in range(self.batch_size):
 	    z = tf.nn.conv2d(tf.reshape(fcn[j,:,:,:],[1,13,13,1024]), kernel[j,:,:,:,:], [1,1,1,1], padding='SAME')
 	    z_s.append(z)
-	z_s = tf.pack(z_s) # (batch_size,1,13,13,att_c)
+	z_s = tf.pack(z_s) # (batch_size,1,13,13,1)
 	z_s = tf.reshape(z_s, [batch_size,13*13])
 	m = tf.nn.softmax(z_s)
 	m = tf.reshape(m, [batch_size,13,13])
 	# value across 1024 are the same
 	m = tf.expand_dims(m,3) # (batch_size,13,13,1)
 	m = tf.tile(m, [1,1,1,1024]) # (batch_size,13,13,1024)
-	att_maps = tf.mul(m,fcn) # (batch_size, 13,13,att_c)
+	att_maps = tf.mul(m,fcn) # (batch_size, 13,13,1024)
 	# TODO add 1x1 conv to avoid overfit
 	
 
 	#------------------------Answer Generation----------------------------
 	# [attention maps]
 	# flatten	
-	att_maps = tf.reshape(att_maps,[self.batch_size,-1]) # flatten the vector (batch_size, 13*13*att_c)
+	att_maps = tf.reshape(att_maps,[self.batch_size,-1]) # flatten the vector (batch_size, 13*13*1024)
 	# fully connected
-	att_maps = tf.nn.bias_add(tf.matmul(att_maps, self.emb_att_W), self.emb_att_b) # (batch_size, dim_hidden)
+	#att_maps = tf.nn.bias_add(tf.matmul(att_maps, self.emb_att_W), self.emb_att_b) # (batch_size, dim_hidden)
+	att_maps = tf.nn.xw_plus_b(att_maps,self.emb_att_W, self.emb_att_b) # (batch_size, dim_hidden)
 	#att_maps = tf.nn.dropout(att_maps, 1-self.drop_out_rate)
 	att_maps = tf.nn.relu(att_maps) # (batch_size, dim_hidden)
+	att_maps = tf.matmul(att_maps, self.att_W)
 	# [image] 
         image_emb = tf.matmul(image, self.emb_image_W) # (batch_size, dim_hidden)
         #image_emb = tf.nn.dropout(image_emb, 1-self.drop_out_rate)
@@ -306,11 +312,11 @@ class Answer_Generator():
 	#answer_pred = tf.nn.dropout(answer_pred, 1-self.drop_out_rate)
 	answer_pred = tf.tanh(answer_pred)
 	# calculating loss
-        cross_entropy = tf.nn.softmax_cross_entropy_with_logits(answer_pred, label) # (batch_size, )
+        cross_entropy = tf.nn.softmax_cross_entropy_with_logits(answer_pred, answer) # (batch_size, )
 	loss = tf.reduce_sum(cross_entropy)
 	loss = loss/self.batch_size
 
-	return loss, image, fcn, question, question_mask, label
+	return loss, image, fcn, question, length_q, question_mask, answer
 
     def build_generator(self):
 
@@ -396,7 +402,8 @@ def train():
     answers = np.zeros([num_train, num_answer])
     answers[range(num_train),np.expand_dims(train_data['answers'],1)[:,0]] = 1 # all x num_answers 
     
-    #pdb.set_trace()
+    # length + 1
+    train_data['length_q'] += 1
 
     model = Answer_Generator(
             dim_image = dim_image,
@@ -408,15 +415,15 @@ def train():
             drop_out_rate = 0.5,
             bias_init_vector = None)
     
-    tf_loss, tf_image, tf_fcn, tf_question, tf_question_mask, tf_label = model.build_model()
+    tf_loss, tf_image, tf_fcn, tf_question, tf_length_q,tf_question_mask, tf_label = model.build_model()
     
     sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
     writer = tf.train.SummaryWriter(writer_path, sess.graph_def)
     saver = tf.train.Saver(max_to_keep=100)
     step = tf.Variable(0, trainable=False)
     # decay every 10 epoch
-    learning_rate = tf.train.exponential_decay(start_lr_rate, step, decay_e, decay_rate)
-    train_op = tf.train.AdamOptimizer(learning_rate).minimize(tf_loss,global_step = step)
+    #learning_rate = tf.train.exponential_decay(start_lr_rate, step, decay_e, decay_rate)
+    train_op = tf.train.AdamOptimizer(0.1).minimize(tf_loss)
     tf.initialize_all_variables().run()
     
     tStart_total = time.time()
@@ -426,7 +433,7 @@ def train():
         np.random.shuffle(index)
         train_data['question'] = train_data['question'][index,:] # (num_train, max_words_q)
 	train_data['length_q'] = train_data['length_q'][index] # (num_train, )
-	answers = answers[index,:] # num_train x num_answers
+	answers = answers[index,:] # num_train, num_answer
         train_data['img_list'] = train_data['img_list'][index]
 	#fcn = fcn[index,:]	
 
@@ -442,7 +449,7 @@ def train():
 	    # initialize
 	    current_question = np.zeros([batch_size, max_words_q])
             current_length_q = np.zeros(batch_size)
-            current_answers = np.zeros([batch_size, num_answer])
+            current_answers = np.zeros([batch_size,num_answer])
             current_img_list = np.zeros(batch_size)
 	    current_img = np.zeros([batch_size,dim_hidden])
 	    current_fcn = np.zeros([batch_size,13,13,1024])
@@ -454,9 +461,12 @@ def train():
 	    current_img = img_feature[current_img_list,:] # (batch_size, dim_image)
 	    #current__fcn = fcn[current_img_list,:]
 	    current_fcn = get_fcn(train_fcn_path, np.take(dataset['unique_img_train'], current_img_list))
-	    current_question_mask = np.zeros([max_words_q, batch_size, 2*dim_hidden])
-    	    current_question_mask[current_length_q, range(batch_size), :] = 1 #(max_words_q, batch_size, 2*dim_hidden)
+	    current_question_mask = np.zeros([max_words_q+1, batch_size, 2*dim_hidden])
+    	    for i in range(batch_size):
+	        current_question_mask[0:current_length_q[i],i,:] = 1
+	    #current_question_mask[current_length_q, range(batch_size), :] = 1 #(max_words_q+1, batch_size, 2*dim_hidden)
 
+	    #pdb.set_trace()
             # do the training process!!!
             _, loss = sess.run(
                     [train_op, tf_loss],
@@ -465,11 +475,12 @@ def train():
                         tf_question: current_question,
 			tf_question_mask: current_question_mask,
                         tf_label: current_answers,
-			tf_fcn: current_fcn
+			tf_fcn: current_fcn,
+			tf_length_q: current_length_q
                         })
 	    loss_epoch[current_batch_file_idx] = loss
             tStop = time.time()
-            print ("Epoch:", epoch, " Batch:", current_batch_file_idx, " Loss:", loss)
+            print ("Epoch:", epoch, " Batch:", current_batch_start_idx/125, " Loss:", loss)
             print ("Time Cost:", round(tStop - tStart,2), "s")
 
 	# every 20 epoch: print result
@@ -536,8 +547,8 @@ def test(m=model_test):
 	current_ques_id = test_data['ques_id'][current_batch_file_idx]
         current_img = img_feature[current_img_list,:] # (batch_size, dim_image)
 	current_fcn = get_fcn(test_fcn_path, np.take(dataset['unique_img_test'], current_img_list))
-        current_question_mask = np.zeros([max_words_q, batch_size, 2*dim_hidden])
-        current_question_mask[current_length_q, range(batch_size), :] = 1 #(max_words_q, batch_size, 2*dim_hidden)
+        current_question_mask = np.zeros([max_words_q+1, batch_size, 2*dim_hidden])
+        current_question_mask[current_length_q, range(batch_size), :] = 1 #(max_words_q+1, batch_size, 2*dim_hidden)
 
 	# do the testing process!!!
         generated_ans = sess.run(
